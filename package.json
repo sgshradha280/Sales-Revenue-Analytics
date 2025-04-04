@@ -3,8 +3,16 @@
   "dependencies": {
     "apollo-server-express": "^3.13.0",
     "dotenv": "^16.4.7",
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "graphql": "^16.10.0",
     "mongoose": "^8.13.1"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.26.9",
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0"
+  },
+  "scripts": {
+    "test": "jest"
   }
 }
