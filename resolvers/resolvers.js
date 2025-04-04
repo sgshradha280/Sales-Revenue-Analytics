@@ -1,108 +1,72 @@
-const Customer = require('../models/customer.model');
-const Product = require('../models/product.model');
-const Order = require('../models/order.model');
+const Customer = require("../models/customer.model");
+const Product = require("../models/product.model");
+const Order = require("../models/order.model");
+const { setCache, getCache } = require("../utils/cache");
 
 const resolvers = {
   Query: {
-    async getCustomerSpending(_, { customerId }) {
-      const result = await Order.aggregate([
-        { $match: { customerId: customerId, status: "completed" } },
-        { 
-          $group: {
-            _id: "$customerId",
-            totalSpent: { $sum: "$totalAmount" },
-            avgOrderValue: { $avg: "$totalAmount" },
-            lastOrderDate: { $max: "$orderDate" }
-          }
-        }
-      ]);
-
-      if (result.length === 0) return null;
+    getCustomerSpending: async (_, { customerId }) => {
+      const orders = await Order.find({ customerId, status: "completed" });
+      const totalSpent = orders.reduce((acc, order) => acc + order.totalAmount, 0);
+      const lastOrder = orders[orders.length - 1];
+      const avgOrderValue = orders.length ? totalSpent / orders.length : 0;
 
       return {
-        customerId: result[0]._id,
-        totalSpent: result[0].totalSpent,
-        averageOrderValue: result[0].avgOrderValue,
-        lastOrderDate: result[0].lastOrderDate
+        customerId,
+        totalSpent,
+        averageOrderValue: avgOrderValue,
+        lastOrderDate: lastOrder ? lastOrder.orderDate : null,
       };
     },
 
-    async getTopSellingProducts(_, { limit }) {
-      const result = await Order.aggregate([
+    getTopSellingProducts: async (_, { limit }) => {
+      const products = await Order.aggregate([
         { $unwind: "$products" },
-        {
-          $group: {
-            _id: "$products.productId",
-            totalSold: { $sum: "$products.quantity" }
-          }
-        },
+        { $group: { _id: "$products.productId", totalSold: { $sum: "$products.quantity" } } },
         { $sort: { totalSold: -1 } },
         { $limit: limit },
-        {
-          $lookup: {
-            from: "products",
-            localField: "_id",
-            foreignField: "_id",
-            as: "productInfo"
-          }
-        },
-        { $unwind: "$productInfo" },
-        {
-          $project: {
-            productId: "$_id",
-            name: "$productInfo.name",
-            totalSold: 1
-          }
-        }
       ]);
-
-      return result;
+      return products.map((p) => ({ productId: p._id, totalSold: p.totalSold }));
     },
 
-    async getSalesAnalytics(_, { startDate, endDate }) {
-      const result = await Order.aggregate([
-        {
-          $match: {
-            orderDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
-            status: "completed"
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: "$totalAmount" },
-            completedOrders: { $sum: 1 }
-          }
-        }
+    getSalesAnalytics: async (_, { startDate, endDate }) => {
+      const cacheKey = `sales:${startDate}:${endDate}`;
+      const cachedData = await getCache(cacheKey);
+      if (cachedData) return cachedData;
+
+      const analytics = await Order.aggregate([
+        { $match: { orderDate: { $gte: new Date(startDate), $lte: new Date(endDate) }, status: "completed" } },
+        { $group: { _id: "$status", totalRevenue: { $sum: "$totalAmount" }, completedOrders: { $sum: 1 } } },
       ]);
 
-      const categoryBreakdown = await Order.aggregate([
-        { $unwind: "$products" },
-        {
-          $lookup: {
-            from: "products",
-            localField: "products.productId",
-            foreignField: "_id",
-            as: "productInfo"
-          }
-        },
-        { $unwind: "$productInfo" },
-        {
-          $group: {
-            _id: "$productInfo.category",
-            revenue: { $sum: { $multiply: ["$products.quantity", "$products.priceAtPurchase"] } }
-          }
-        },
-        { $project: { category: "$_id", revenue: 1 } }
-      ]);
+      await setCache(cacheKey, analytics, 600);
+      return analytics;
+    },
 
-      return {
-        totalRevenue: result[0]?.totalRevenue || 0,
-        completedOrders: result[0]?.completedOrders || 0,
-        categoryBreakdown
-      };
-    }
-  }
+    getCustomerOrders: async (_, { customerId, limit = 5, offset = 0 }) => {
+      return await Order.find({ customerId })
+        .sort({ orderDate: -1 })
+        .skip(offset)
+        .limit(limit);
+    },
+  },
+
+  Mutation: {
+    placeOrder: async (_, { customerId, products }) => {
+      let totalAmount = products.reduce((sum, item) => sum + item.quantity * item.priceAtPurchase, 0);
+
+      const newOrder = new Order({
+        customerId,
+        products,
+        totalAmount,
+        orderDate: new Date().toISOString(),
+        status: "pending",
+      });
+
+      await newOrder.save();
+      return newOrder;
+    },
+  },
 };
 
 module.exports = resolvers;

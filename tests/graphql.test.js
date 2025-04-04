@@ -1,5 +1,5 @@
 const request = require("supertest");
-const app = require("../server"); // Import your Express app
+const app = require("../server");
 
 describe("GraphQL API Tests", () => {
   it("should fetch customer spending", async () => {
